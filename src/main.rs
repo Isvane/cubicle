@@ -19,6 +19,9 @@ fn main() {
                         Cmd::Set(key, value) => {
                             initial_map.insert(key, value);
                         }
+                        Cmd::Put(key, value) => {
+                            initial_map.entry(key).and_modify(|m| *m = value);
+                        }
                         Cmd::Delete(key) => {
                             initial_map.remove(&key);
                         }
@@ -63,6 +66,21 @@ fn main() {
                             println!("-> Error: Failed to write to WAL")
                         }
                     }
+                    Cmd::Put(key, value) => {
+                        if cubic.contains_key(&key) {
+                            let log = format!("PUT {} {}\n", key, value);
+                            if wal_file.write_all(log.as_bytes()).is_ok()
+                                && wal_file.flush().is_ok()
+                            {
+                                cubic.insert(key, value);
+                                println!("-> Updated")
+                            } else {
+                                println!("-> Error: Failed to write to WAL")
+                            }
+                        } else {
+                            println!("Key not found");
+                        }
+                    }
                     Cmd::Delete(key) => {
                         let log = format!("DELETE {}\n", key);
                         if wal_file.write_all(log.as_bytes()).is_ok() && wal_file.flush().is_ok() {
@@ -94,6 +112,7 @@ fn main() {
 enum Cmd {
     Get(i32),
     Set(i32, String),
+    Put(i32, String),
     Delete(i32),
     See,
 }
@@ -116,6 +135,12 @@ impl FromStr for Cmd {
                 let key = key.parse::<i32>().map_err(|_| "Key must be integer")?;
                 let value = parts.collect::<Vec<_>>().join(" ");
                 Ok(Cmd::Set(key, value))
+            }
+            "PUT" => {
+                let key = parts.next().ok_or("PUT requires a key")?;
+                let key = key.parse::<i32>().map_err(|_| "Key must be integer")?;
+                let value = parts.collect::<Vec<_>>().join(" ");
+                Ok(Cmd::Put(key, value))
             }
             "DELETE" => {
                 let key = parts.next().ok_or("DELETE requires a key")?;
