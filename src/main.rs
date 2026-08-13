@@ -74,7 +74,7 @@ impl FromStr for Cmd {
             "SET" => {
                 let key = parts.next().ok_or("SET requires a key")?;
                 let key = key.parse::<i32>().map_err(|_| "Key must be integer")?;
-                let value = parts.next().ok_or("SET requires a value")?.to_string();
+                let value = parts.collect::<Vec<_>>().join(" ");
                 Ok(Cmd::Set(key, value))
             }
             "DELETE" => {
