@@ -35,6 +35,15 @@ fn main() {
                             println!("Key not found")
                         }
                     }
+                    Cmd::See => {
+                        if !cubic.is_empty() {
+                            for (key, value) in cubic.iter() {
+                                println!("{}: {}", key, value);
+                            }
+                        } else {
+                            println!("Cubicle is empty")
+                        }
+                    }
                 }
             }
             Err(err) => println!("Error: {err}"),
@@ -46,6 +55,7 @@ enum Cmd {
     Get(i32),
     Set(i32, String),
     Delete(i32),
+    See,
 }
 
 impl FromStr for Cmd {
@@ -72,6 +82,7 @@ impl FromStr for Cmd {
                 let key = key.parse::<i32>().map_err(|_| "Key must be integer")?;
                 Ok(Cmd::Delete(key))
             }
+            "SEE" => Ok(Cmd::See),
             _ => Err(format!("Invalid command {}", verb)),
         }
     }
