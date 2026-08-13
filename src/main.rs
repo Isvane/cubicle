@@ -1,12 +1,42 @@
 use std::{
     collections::BTreeMap,
-    io,
+    fs::{File, OpenOptions},
+    io::{self, BufRead, BufReader, Write},
     str::FromStr,
     sync::{Arc, Mutex},
 };
 
+const WAL: &str = "cubicle.wal";
+
 fn main() {
-    let cubicle = Arc::new(Mutex::new(BTreeMap::<i32, String>::new()));
+    let mut initial_map = BTreeMap::<i32, String>::new();
+    if let Ok(file) = File::open(WAL) {
+        let reader = BufReader::new(file);
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                if let Ok(cmd) = line.parse::<Cmd>() {
+                    match cmd {
+                        Cmd::Set(key, value) => {
+                            initial_map.insert(key, value);
+                        }
+                        Cmd::Delete(key) => {
+                            initial_map.remove(&key);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        println!("Restored {} items from WAL", initial_map.len());
+    }
+
+    let cubicle = Arc::new(Mutex::new(initial_map));
+
+    let mut wal_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(WAL)
+        .expect("Failed to open WAL file");
 
     loop {
         println!("Enter a command: ");
@@ -25,14 +55,24 @@ fn main() {
                         None => println!("Keys not found"),
                     },
                     Cmd::Set(key, value) => {
-                        cubic.insert(key, value);
-                        println!("-> OK")
+                        let log = format!("SET {} {}\n", key, value);
+                        if wal_file.write_all(log.as_bytes()).is_ok() && wal_file.flush().is_ok() {
+                            cubic.insert(key, value);
+                            println!("-> OK")
+                        } else {
+                            println!("-> Error: Failed to write to WAL")
+                        }
                     }
                     Cmd::Delete(key) => {
-                        if cubic.remove(&key).is_some() {
-                            println!("-> Deleted")
+                        let log = format!("DELETE {}\n", key);
+                        if wal_file.write_all(log.as_bytes()).is_ok() && wal_file.flush().is_ok() {
+                            if cubic.remove(&key).is_some() {
+                                println!("-> Deleted")
+                            } else {
+                                println!("Key not found")
+                            }
                         } else {
-                            println!("Key not found")
+                            println!("-> Error: Failed to write to WAL")
                         }
                     }
                     Cmd::See => {
