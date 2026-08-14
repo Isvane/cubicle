@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    fmt,
     fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, Write},
     str::FromStr,
@@ -14,7 +15,7 @@ fn main() {
         let reader = BufReader::new(file);
         for line in reader.lines() {
             if let Ok(line) = line {
-                if let Ok(cmd) = line.parse::<Cmd>() {
+                if let Ok(cmd) = line.parse::<Cmd<i32>>() {
                     match cmd {
                         Cmd::Set(key, value) => {
                             initial_map.insert(key, value);
@@ -49,7 +50,7 @@ fn main() {
             .read_line(&mut input)
             .expect("Failed to read command");
 
-        match input.parse::<Cmd>() {
+        match input.parse::<Cmd<i32>>() {
             Ok(cmd) => {
                 let mut cubic = cubicle.lock().unwrap();
                 match cmd {
@@ -104,20 +105,24 @@ fn main() {
                     }
                 }
             }
-            Err(err) => println!("Error: {err}"),
+            Err(err) => println!("-> Error: {err}"),
         }
     }
 }
 
-enum Cmd {
-    Get(i32),
-    Set(i32, String),
-    Put(i32, String),
-    Delete(i32),
+enum Cmd<T> {
+    Get(T),
+    Set(T, String),
+    Put(T, String),
+    Delete(T),
     See,
 }
 
-impl FromStr for Cmd {
+impl<T> FromStr for Cmd<T>
+where
+    T: FromStr,
+    T::Err: fmt::Display,
+{
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -127,24 +132,24 @@ impl FromStr for Cmd {
         match verb.as_str() {
             "GET" => {
                 let key = parts.next().ok_or("GET requires a key")?;
-                let key = key.parse::<i32>().map_err(|_| "Key must be integer")?;
+                let key = key.parse::<T>().map_err(|e| format!("{e}"))?;
                 Ok(Cmd::Get(key))
             }
             "SET" => {
                 let key = parts.next().ok_or("SET requires a key")?;
-                let key = key.parse::<i32>().map_err(|_| "Key must be integer")?;
+                let key = key.parse::<T>().map_err(|e| format!("{e}"))?;
                 let value = parts.collect::<Vec<_>>().join(" ");
                 Ok(Cmd::Set(key, value))
             }
             "PUT" => {
                 let key = parts.next().ok_or("PUT requires a key")?;
-                let key = key.parse::<i32>().map_err(|_| "Key must be integer")?;
+                let key = key.parse::<T>().map_err(|e| format!("{e}"))?;
                 let value = parts.collect::<Vec<_>>().join(" ");
                 Ok(Cmd::Put(key, value))
             }
             "DELETE" => {
                 let key = parts.next().ok_or("DELETE requires a key")?;
-                let key = key.parse::<i32>().map_err(|_| "Key must be integer")?;
+                let key = key.parse::<T>().map_err(|e| format!("{e}"))?;
                 Ok(Cmd::Delete(key))
             }
             "SEE" => Ok(Cmd::See),
