@@ -10,12 +10,12 @@ use std::{
 const WAL: &str = "cubicle.wal";
 
 fn main() {
-    let mut initial_map = BTreeMap::<i32, String>::new();
+    let mut initial_map = BTreeMap::<String, String>::new();
     if let Ok(file) = File::open(WAL) {
         let reader = BufReader::new(file);
         for line in reader.lines() {
             if let Ok(line) = line {
-                if let Ok(cmd) = line.parse::<Cmd<i32>>() {
+                if let Ok(cmd) = line.parse::<Cmd<String>>() {
                     match cmd {
                         Cmd::Set(key, value) => {
                             initial_map.insert(key, value);
@@ -50,7 +50,7 @@ fn main() {
             .read_line(&mut input)
             .expect("Failed to read command");
 
-        match input.parse::<Cmd<i32>>() {
+        match input.parse::<Cmd<String>>() {
             Ok(cmd) => {
                 let mut cubic = cubicle.lock().unwrap();
                 match cmd {
