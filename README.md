@@ -6,9 +6,10 @@ Minimal key-value store built in Rust to learn how databases store and recover d
 
 ## Overview
 
-* **File Logging:** Every write command (`SET`, `PUT`, `DELETE`) gets written to a text file (`cubicle.wal`) before updating memory.
-* **Data Recovery:** When you start the app, it reads through the log file to rebuild your data automatically.
-* **In-Memory Storage:** Stores data in a sorted map, using integer keys and text values.
+* **Write-Ahead Logging (WAL):** Write operations (`SET`, `PUT`, `DELETE`) are logged to `cubicle.wal` to preserve state in real time.
+* **Snapshotting:** Creates a compact, point-in-time state dump in `cubicle.snap` and truncates the WAL to keep startup fast and log files small.
+* **Data Recovery:** Automatically restores state on launch by first loading the snapshot baseline, then replaying remaining WAL entries.
+* **In-Memory Storage:** Keeps data in a sorted map for fast lookups and sorted iteration.
 
 ---
 
@@ -21,6 +22,7 @@ Minimal key-value store built in Rust to learn how databases store and recover d
 | `PUT` | `PUT <key> <value>` | Update an existing key |
 | `DELETE` | `DELETE <key>` | Remove a key |
 | `SEE` | `SEE` | Print all stored data |
+| `SNAPSHOT` | `SNAPSHOT` | Compact current state to disk and clear the WAL |
 
 ---
 
@@ -40,9 +42,13 @@ SET 1 hello
 Enter a command: 
 GET 1
 -> hello
+
+Enter a command: 
+SNAPSHOT
+-> Snapshot saved
 ```
 
 Close the app and restart it. You will see:
 ```text
-Restored 1 items from WAL
+Restored 1 items from disk
 ```

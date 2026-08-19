@@ -8,31 +8,11 @@ use std::{
 };
 
 const WAL: &str = "cubicle.wal";
+const SNAPSHOT: &str = "cubicle.snap";
 
 fn main() {
-    let mut initial_map = BTreeMap::<String, String>::new();
-    if let Ok(file) = File::open(WAL) {
-        let reader = BufReader::new(file);
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                if let Ok(cmd) = line.parse::<Cmd<String>>() {
-                    match cmd {
-                        Cmd::Set(key, value) => {
-                            initial_map.insert(key, value);
-                        }
-                        Cmd::Put(key, value) => {
-                            initial_map.entry(key).and_modify(|m| *m = value);
-                        }
-                        Cmd::Delete(key) => {
-                            initial_map.remove(&key);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        println!("Restored {} items from WAL", initial_map.len());
-    }
+    let initial_map = restore_state();
+    println!("Restored {} items from disk", initial_map.len());
 
     let cubicle = Arc::new(Mutex::new(initial_map));
 
@@ -46,9 +26,9 @@ fn main() {
         println!("Enter a command: ");
         let mut input = String::new();
 
-        io::stdin()
-            .read_line(&mut input)
-            .expect("Failed to read command");
+        if io::stdin().read_line(&mut input).is_err() {
+            break;
+        }
 
         match input.parse::<Cmd<String>>() {
             Ok(cmd) => {
@@ -56,15 +36,15 @@ fn main() {
                 match cmd {
                     Cmd::Get(key) => match cubic.get(&key) {
                         Some(val) => println!("-> {val}"),
-                        None => println!("Keys not found"),
+                        None => println!("Key not found"),
                     },
                     Cmd::Set(key, value) => {
                         let log = format!("SET {} {}\n", key, value);
                         if wal_file.write_all(log.as_bytes()).is_ok() && wal_file.flush().is_ok() {
                             cubic.insert(key, value);
-                            println!("-> OK")
+                            println!("-> OK");
                         } else {
-                            println!("-> Error: Failed to write to WAL")
+                            println!("-> Error: Failed to write to WAL");
                         }
                     }
                     Cmd::Put(key, value) => {
@@ -74,9 +54,9 @@ fn main() {
                                 && wal_file.flush().is_ok()
                             {
                                 cubic.insert(key, value);
-                                println!("-> Updated")
+                                println!("-> Updated");
                             } else {
-                                println!("-> Error: Failed to write to WAL")
+                                println!("-> Error: Failed to write to WAL");
                             }
                         } else {
                             println!("Key not found");
@@ -86,12 +66,12 @@ fn main() {
                         let log = format!("DELETE {}\n", key);
                         if wal_file.write_all(log.as_bytes()).is_ok() && wal_file.flush().is_ok() {
                             if cubic.remove(&key).is_some() {
-                                println!("-> Deleted")
+                                println!("-> Deleted");
                             } else {
-                                println!("Key not found")
+                                println!("Key not found");
                             }
                         } else {
-                            println!("-> Error: Failed to write to WAL")
+                            println!("-> Error: Failed to write to WAL");
                         }
                     }
                     Cmd::See => {
@@ -100,7 +80,25 @@ fn main() {
                                 println!("{}: {}", key, value);
                             }
                         } else {
-                            println!("Cubicle is empty")
+                            println!("Cubicle is empty");
+                        }
+                    }
+                    Cmd::Snapshot => {
+                        if let Err(e) = create_snapshot(&cubic) {
+                            println!("-> Error creating snapshot: {e}");
+                        } else {
+                            match OpenOptions::new()
+                                .create(true)
+                                .write(true)
+                                .truncate(true)
+                                .open(WAL)
+                            {
+                                Ok(new_wal) => {
+                                    wal_file = new_wal;
+                                    println!("-> Snapshot saved");
+                                }
+                                Err(e) => println!("-> Failed to truncate WAL: {e}"),
+                            }
                         }
                     }
                 }
@@ -110,12 +108,61 @@ fn main() {
     }
 }
 
+fn restore_state() -> BTreeMap<String, String> {
+    let mut map = BTreeMap::new();
+
+    if let Ok(file) = File::open(SNAPSHOT) {
+        let reader = BufReader::new(file);
+        for line in reader.lines().map_while(Result::ok) {
+            if let Ok(Cmd::Set(key, value)) = line.parse::<Cmd<String>>() {
+                map.insert(key, value);
+            }
+        }
+    }
+
+    if let Ok(file) = File::open(WAL) {
+        let reader = BufReader::new(file);
+        for line in reader.lines().map_while(Result::ok) {
+            if let Ok(cmd) = line.parse::<Cmd<String>>() {
+                match cmd {
+                    Cmd::Set(key, value) => {
+                        map.insert(key, value);
+                    }
+                    Cmd::Put(key, value) => {
+                        map.entry(key).and_modify(|m| *m = value);
+                    }
+                    Cmd::Delete(key) => {
+                        map.remove(&key);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    map
+}
+
+fn create_snapshot(map: &BTreeMap<String, String>) -> io::Result<()> {
+    let temp_path = "cubicle.snap.tmp";
+
+    let mut file = File::create(temp_path)?;
+    for (key, val) in map {
+        writeln!(file, "SET {} {}", key, val)?;
+    }
+    file.flush()?;
+
+    std::fs::rename(temp_path, SNAPSHOT)?;
+    Ok(())
+}
+
 enum Cmd<T> {
     Get(T),
     Set(T, String),
     Put(T, String),
     Delete(T),
     See,
+    Snapshot,
 }
 
 impl<T> FromStr for Cmd<T>
@@ -126,7 +173,7 @@ where
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut parts = s.trim().split_whitespace();
+        let mut parts = s.split_whitespace();
         let verb = parts.next().ok_or("Empty input")?.to_uppercase();
 
         match verb.as_str() {
@@ -153,6 +200,7 @@ where
                 Ok(Cmd::Delete(key))
             }
             "SEE" => Ok(Cmd::See),
+            "SNAPSHOT" => Ok(Cmd::Snapshot),
             _ => Err(format!("Invalid command {}", verb)),
         }
     }
