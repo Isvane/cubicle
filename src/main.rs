@@ -4,7 +4,8 @@ use std::{
     fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, Write},
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc::channel},
+    thread,
 };
 
 const WAL: &str = "cubicle.wal";
@@ -21,6 +22,26 @@ fn main() {
         .append(true)
         .open(WAL)
         .expect("Failed to open WAL file");
+
+    let (tx, rx) = channel::<BTreeMap<String, String>>();
+
+    thread::spawn(move || {
+        while let Ok(snapshot_data) = rx.recv() {
+            if let Err(e) = create_snapshot(&snapshot_data) {
+                eprintln!("Background snapshot failed: {e}");
+            }
+        }
+    });
+
+    let bg_cubic = Arc::clone(&cubicle);
+    let bg_tx = tx.clone();
+    thread::spawn(move || {
+        loop {
+            thread::sleep(std::time::Duration::from_secs(15));
+            let snapshot_copy = bg_cubic.lock().unwrap().clone();
+            let _ = bg_tx.send(snapshot_copy);
+        }
+    });
 
     loop {
         println!("Enter a command: ");
