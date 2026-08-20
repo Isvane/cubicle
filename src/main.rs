@@ -4,7 +4,11 @@ use std::{
     fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, Write},
     str::FromStr,
-    sync::{Arc, Mutex, mpsc::channel},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{Receiver, Sender, channel},
+    },
     thread,
 };
 
@@ -16,6 +20,7 @@ fn main() {
     println!("Restored {} items from disk", initial_map.len());
 
     let cubicle = Arc::new(Mutex::new(initial_map));
+    let dirty = Arc::new(AtomicBool::new(false));
 
     let mut wal_file = OpenOptions::new()
         .create(true)
@@ -23,27 +28,36 @@ fn main() {
         .open(WAL)
         .expect("Failed to open WAL file");
 
-    let (tx, rx) = channel::<BTreeMap<String, String>>();
+    let (tx, rx): (Sender<()>, Receiver<()>) = channel();
 
+    let bg_cubic = Arc::clone(&cubicle);
+    let bg_dirty = Arc::clone(&dirty);
     thread::spawn(move || {
-        while let Ok(snapshot_data) = rx.recv() {
-            if let Err(e) = create_snapshot(&snapshot_data) {
-                eprintln!("Background snapshot failed: {e}");
+        loop {
+            thread::sleep(std::time::Duration::from_secs(10));
+
+            if bg_dirty.swap(false, Ordering::AcqRel) {
+                let snapshot_copy = bg_cubic.lock().unwrap().clone();
+                if let Err(e) = create_snapshot(&snapshot_copy) {
+                    eprintln!("Background snapshot failed: {e}")
+                } else {
+                    let _ = tx.send(());
+                }
             }
         }
     });
 
-    let bg_cubic = Arc::clone(&cubicle);
-    let bg_tx = tx.clone();
-    thread::spawn(move || {
-        loop {
-            thread::sleep(std::time::Duration::from_secs(15));
-            let snapshot_copy = bg_cubic.lock().unwrap().clone();
-            let _ = bg_tx.send(snapshot_copy);
-        }
-    });
-
     loop {
+        if rx.try_recv().is_ok()
+            && let Ok(new_wal) = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(WAL)
+        {
+            wal_file = new_wal;
+        }
+
         println!("Enter a command: ");
         let mut input = String::new();
 
@@ -63,6 +77,7 @@ fn main() {
                         let log = format!("SET {} {}\n", key, value);
                         if wal_file.write_all(log.as_bytes()).is_ok() && wal_file.flush().is_ok() {
                             cubic.insert(key, value);
+                            dirty.store(true, Ordering::Release);
                             println!("-> OK");
                         } else {
                             println!("-> Error: Failed to write to WAL");
@@ -75,6 +90,7 @@ fn main() {
                                 && wal_file.flush().is_ok()
                             {
                                 cubic.insert(key, value);
+                                dirty.store(true, Ordering::Release);
                                 println!("-> Updated");
                             } else {
                                 println!("-> Error: Failed to write to WAL");
@@ -87,6 +103,7 @@ fn main() {
                         let log = format!("DELETE {}\n", key);
                         if wal_file.write_all(log.as_bytes()).is_ok() && wal_file.flush().is_ok() {
                             if cubic.remove(&key).is_some() {
+                                dirty.store(true, Ordering::Release);
                                 println!("-> Deleted");
                             } else {
                                 println!("Key not found");
