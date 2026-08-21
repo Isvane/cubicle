@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs::OpenOptions,
     io::{self, Write},
     sync::{
@@ -11,14 +12,14 @@ use std::{
 
 mod cubicle;
 
-use cubicle::cmd::Cmd;
+use cubicle::cmd::{Cmd, Value};
 use cubicle::persistence::{WAL, create_snapshot, restore_state};
 
 fn main() {
-    let initial_map = restore_state();
+    let initial_map: BTreeMap<String, Value> = restore_state();
     println!("Restored {} items from disk", initial_map.len());
 
-    let cubicle = Arc::new(Mutex::new(initial_map));
+    let cubicle: Arc<Mutex<BTreeMap<String, Value>>> = Arc::new(Mutex::new(initial_map));
     let dirty = Arc::new(AtomicBool::new(false));
 
     let mut wal_file = OpenOptions::new()

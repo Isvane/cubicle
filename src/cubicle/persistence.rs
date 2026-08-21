@@ -4,12 +4,12 @@ use std::{
     io::{self, BufRead, BufReader, Write},
 };
 
-use crate::cubicle::cmd::Cmd;
+use crate::cubicle::cmd::{Cmd, Value};
 
 pub(crate) const WAL: &str = "cubicle.wal";
 pub(crate) const SNAPSHOT: &str = "cubicle.snap";
 
-pub fn restore_state() -> BTreeMap<String, String> {
+pub fn restore_state() -> BTreeMap<String, Value> {
     let mut map = BTreeMap::new();
 
     if let Ok(file) = File::open(SNAPSHOT) {
@@ -44,7 +44,7 @@ pub fn restore_state() -> BTreeMap<String, String> {
     map
 }
 
-pub fn create_snapshot(map: &BTreeMap<String, String>) -> io::Result<()> {
+pub fn create_snapshot(map: &BTreeMap<String, Value>) -> io::Result<()> {
     let temp_path = "cubicle.snap.tmp";
 
     let mut file = File::create(temp_path)?;
