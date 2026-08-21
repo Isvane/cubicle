@@ -1,9 +1,6 @@
 use std::{
-    collections::BTreeMap,
-    fmt,
-    fs::{File, OpenOptions},
-    io::{self, BufRead, BufReader, Write},
-    str::FromStr,
+    fs::OpenOptions,
+    io::{self, Write},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -12,8 +9,10 @@ use std::{
     thread,
 };
 
-const WAL: &str = "cubicle.wal";
-const SNAPSHOT: &str = "cubicle.snap";
+mod cubicle;
+
+use cubicle::cmd::Cmd;
+use cubicle::persistence::{WAL, create_snapshot, restore_state};
 
 fn main() {
     let initial_map = restore_state();
@@ -142,104 +141,6 @@ fn main() {
                 }
             }
             Err(err) => println!("-> Error: {err}"),
-        }
-    }
-}
-
-fn restore_state() -> BTreeMap<String, String> {
-    let mut map = BTreeMap::new();
-
-    if let Ok(file) = File::open(SNAPSHOT) {
-        let reader = BufReader::new(file);
-        for line in reader.lines().map_while(Result::ok) {
-            if let Ok(Cmd::Set(key, value)) = line.parse::<Cmd<String>>() {
-                map.insert(key, value);
-            }
-        }
-    }
-
-    if let Ok(file) = File::open(WAL) {
-        let reader = BufReader::new(file);
-        for line in reader.lines().map_while(Result::ok) {
-            if let Ok(cmd) = line.parse::<Cmd<String>>() {
-                match cmd {
-                    Cmd::Set(key, value) => {
-                        map.insert(key, value);
-                    }
-                    Cmd::Put(key, value) => {
-                        map.entry(key).and_modify(|m| *m = value);
-                    }
-                    Cmd::Delete(key) => {
-                        map.remove(&key);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    map
-}
-
-fn create_snapshot(map: &BTreeMap<String, String>) -> io::Result<()> {
-    let temp_path = "cubicle.snap.tmp";
-
-    let mut file = File::create(temp_path)?;
-    for (key, val) in map {
-        writeln!(file, "SET {} {}", key, val)?;
-    }
-    file.flush()?;
-
-    std::fs::rename(temp_path, SNAPSHOT)?;
-    Ok(())
-}
-
-enum Cmd<T> {
-    Get(T),
-    Set(T, String),
-    Put(T, String),
-    Delete(T),
-    See,
-    Snapshot,
-}
-
-impl<T> FromStr for Cmd<T>
-where
-    T: FromStr,
-    T::Err: fmt::Display,
-{
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut parts = s.split_whitespace();
-        let verb = parts.next().ok_or("Empty input")?.to_uppercase();
-
-        match verb.as_str() {
-            "GET" => {
-                let key = parts.next().ok_or("GET requires a key")?;
-                let key = key.parse::<T>().map_err(|e| format!("{e}"))?;
-                Ok(Cmd::Get(key))
-            }
-            "SET" => {
-                let key = parts.next().ok_or("SET requires a key")?;
-                let key = key.parse::<T>().map_err(|e| format!("{e}"))?;
-                let value = parts.collect::<Vec<_>>().join(" ");
-                Ok(Cmd::Set(key, value))
-            }
-            "PUT" => {
-                let key = parts.next().ok_or("PUT requires a key")?;
-                let key = key.parse::<T>().map_err(|e| format!("{e}"))?;
-                let value = parts.collect::<Vec<_>>().join(" ");
-                Ok(Cmd::Put(key, value))
-            }
-            "DELETE" => {
-                let key = parts.next().ok_or("DELETE requires a key")?;
-                let key = key.parse::<T>().map_err(|e| format!("{e}"))?;
-                Ok(Cmd::Delete(key))
-            }
-            "SEE" => Ok(Cmd::See),
-            "SNAPSHOT" => Ok(Cmd::Snapshot),
-            _ => Err(format!("Invalid command {}", verb)),
         }
     }
 }
