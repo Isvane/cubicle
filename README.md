@@ -10,7 +10,7 @@ Minimal key-value store built in Rust to learn how databases store and recover d
 * **Snapshotting:** Creates a compact, point-in-time state dump in `cubicle.snap` and truncates the WAL to keep startup fast and log files small.
 * **Data Recovery:** Automatically restores state on launch by first loading the snapshot baseline, then replaying remaining WAL entries.
 * **In-Memory Storage:** Keeps data in a sorted map for fast lookups and sorted iteration.
-* **Typed Values:** Values are strongly typed and natively support Strings (quoted or unquoted), Integers (`i64`), Floats (`f64`), and Booleans (`bool`).
+* **Typed Values:** Values are strongly typed and natively support Strings (quoted or unquoted), Integers (`i64`), Floats (`f64`), List (`Vec<Value>`), and Booleans (`bool`).
 
 ---
 

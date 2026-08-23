@@ -15,6 +15,7 @@ pub(crate) enum Value {
     Integer(i64),
     Float(f64),
     Boolean(bool),
+    List(Vec<Value>),
 }
 
 impl<T> FromStr for Cmd<T>
@@ -64,17 +65,32 @@ impl FromStr for Value {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Ok(val) = s.parse::<i64>() {
+        let trimmed = s.trim();
+
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            let inner = &trimmed[1..trimmed.len() - 1];
+            if inner.trim().is_empty() {
+                return Ok(Value::List(Vec::new()));
+            }
+
+            let elements = inner
+                .split(',')
+                .map(|item| item.trim().parse::<Value>())
+                .collect::<Result<Vec<Value>, String>>()?;
+
+            return Ok(Value::List(elements));
+        }
+
+        if let Ok(val) = trimmed.parse::<i64>() {
             return Ok(Value::Integer(val));
         }
-        if let Ok(val) = s.parse::<f64>() {
+        if let Ok(val) = trimmed.parse::<f64>() {
             return Ok(Value::Float(val));
         }
-        if let Ok(val) = s.parse::<bool>() {
+        if let Ok(val) = trimmed.parse::<bool>() {
             return Ok(Value::Boolean(val));
         }
 
-        let trimmed = s.trim();
         if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
             Ok(Value::String(trimmed[1..trimmed.len() - 1].to_string()))
         } else {
@@ -90,6 +106,10 @@ impl std::fmt::Display for Value {
             Value::Integer(i) => write!(f, "{i}"),
             Value::Boolean(b) => write!(f, "{b}"),
             Value::Float(l) => write!(f, "{l}"),
+            Value::List(l) => {
+                let items: Vec<String> = l.iter().map(|v| v.to_string()).collect();
+                write!(f, "[{}]", items.join(", "))
+            }
         }
     }
 }
