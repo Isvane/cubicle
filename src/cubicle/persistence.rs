@@ -4,6 +4,8 @@ use std::{
     io::{self, BufRead, BufReader, Write},
 };
 
+use crc32fast::hash;
+
 use crate::cubicle::cmd::{Cmd, Value};
 
 pub(crate) const WAL: &str = "cubicle.wal";
@@ -15,8 +17,20 @@ pub fn restore_state() -> BTreeMap<String, Value> {
     if let Ok(file) = File::open(SNAPSHOT) {
         let reader = BufReader::new(file);
         for line in reader.lines().map_while(Result::ok) {
-            if let Ok(Cmd::Set(key, value)) = line.parse::<Cmd<String>>() {
-                map.insert(key, value);
+            if let Some((crc_hex, payload)) =
+                line.strip_prefix("SET ").and_then(|r| r.split_once(' '))
+            {
+                if let Ok(expected_crc) = u32::from_str_radix(crc_hex, 16) {
+                    let actual_crc = hash(payload.as_bytes());
+                    if actual_crc == expected_crc {
+                        if let Some((key, value_str)) = payload.split_once(' ') {
+                            let parsed_val = value_str
+                                .parse::<Value>()
+                                .unwrap_or_else(|_| Value::String(value_str.to_string()));
+                            map.insert(key.to_string(), parsed_val);
+                        }
+                    }
+                }
             }
         }
     }
@@ -49,7 +63,12 @@ pub fn create_snapshot(map: &BTreeMap<String, Value>) -> io::Result<()> {
 
     let mut file = File::create(temp_path)?;
     for (key, val) in map {
-        writeln!(file, "SET {} {}", key, val)?;
+        let payload = format!("{} {}", key, val);
+
+        let crc = hash(payload.as_bytes());
+        let crc_hex = format!("{:08x}", crc);
+
+        writeln!(file, "SET {} {}", crc_hex, payload)?;
     }
     file.flush()?;
 
