@@ -21,7 +21,6 @@ Minimal persistent key-value store built in Rust to learn how "databases" manage
 | :--- | :--- | :--- |
 | `SET` | `SET <key> <value>` | Save or overwrite a key-value pair |
 | `GET` | `GET <key>` | Look up a value by key |
-| `PUT` | `PUT <key> <value>` | Update an existing key |
 | `DELETE` | `DELETE <key>` | Remove a key |
 | `SEE` | `SEE` | Print all stored key-value pairs in sorted order |
 | `SNAPSHOT` | `SNAPSHOT` | Manually trigger a snapshot dump and clear the WAL |

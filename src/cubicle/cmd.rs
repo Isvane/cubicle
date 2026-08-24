@@ -3,7 +3,6 @@ use std::{fmt, str::FromStr};
 pub(crate) enum Cmd<T> {
     Get(T),
     Set(T, Value),
-    Put(T, Value),
     Delete(T),
     See,
     Snapshot,
@@ -41,13 +40,6 @@ where
                 let value_str = parts.collect::<Vec<_>>().join(" ");
                 let value = value_str.parse::<Value>()?;
                 Ok(Cmd::Set(key, value))
-            }
-            "PUT" => {
-                let key = parts.next().ok_or("PUT requires a key")?;
-                let key = key.parse::<T>().map_err(|e| format!("{e}"))?;
-                let value_str = parts.collect::<Vec<_>>().join(" ");
-                let value = value_str.parse::<Value>()?;
-                Ok(Cmd::Put(key, value))
             }
             "DELETE" => {
                 let key = parts.next().ok_or("DELETE requires a key")?;
@@ -105,7 +97,7 @@ impl std::fmt::Display for Value {
             Value::String(s) => write!(f, "\"{s}\""),
             Value::Integer(i) => write!(f, "{i}"),
             Value::Boolean(b) => write!(f, "{b}"),
-            Value::Float(l) => write!(f, "{l}"),
+            Value::Float(fl) => write!(f, "{fl}"),
             Value::List(l) => {
                 let items: Vec<String> = l.iter().map(|v| v.to_string()).collect();
                 write!(f, "[{}]", items.join(", "))

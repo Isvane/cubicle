@@ -85,22 +85,6 @@ fn main() {
                             println!("-> Error: Failed to write to WAL");
                         }
                     }
-                    Cmd::Put(key, value) => {
-                        if cubic.contains_key(&key) {
-                            let log = format!("PUT {} {}\n", key, value);
-                            if wal_file.write_all(log.as_bytes()).is_ok()
-                                && wal_file.flush().is_ok()
-                            {
-                                cubic.insert(key, value);
-                                dirty.store(true, Ordering::Release);
-                                println!("-> Updated");
-                            } else {
-                                println!("-> Error: Failed to write to WAL");
-                            }
-                        } else {
-                            println!("Key not found");
-                        }
-                    }
                     Cmd::Delete(key) => {
                         let log = format!("DELETE {}\n", key);
                         if wal_file.write_all(log.as_bytes()).is_ok() && wal_file.flush().is_ok() {

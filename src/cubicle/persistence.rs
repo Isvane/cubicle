@@ -43,11 +43,6 @@ pub fn restore_state() -> OrdMap<String, Value> {
                     Cmd::Set(key, value) => {
                         map.insert(key, value);
                     }
-                    Cmd::Put(key, value) => {
-                        if map.contains_key(&key) {
-                            map.insert(key, value);
-                        }
-                    }
                     Cmd::Delete(key) => {
                         map.remove(&key);
                     }
