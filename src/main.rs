@@ -2,7 +2,7 @@ use std::{
     fs::OpenOptions,
     io::{self, Write},
     sync::{
-        Arc, Mutex,
+        Arc, RwLock,
         atomic::{AtomicBool, Ordering},
         mpsc::{Receiver, Sender, channel},
     },
@@ -20,7 +20,7 @@ fn main() {
     let initial_map: OrdMap<String, Value> = restore_state();
     println!("Restored {} items from disk", initial_map.len());
 
-    let cubicle: Arc<Mutex<OrdMap<String, Value>>> = Arc::new(Mutex::new(initial_map));
+    let cubicle = Arc::new(RwLock::new(initial_map));
     let dirty = Arc::new(AtomicBool::new(false));
 
     let mut wal_file = OpenOptions::new()
@@ -39,7 +39,7 @@ fn main() {
             thread::sleep(std::time::Duration::from_secs(10));
 
             if bg_dirty.swap(false, Ordering::AcqRel) {
-                let snapshot_copy = bg_cubic.lock().unwrap().clone();
+                let snapshot_copy = bg_cubic.read().expect("").clone();
                 if let Err(e) = create_snapshot(&snapshot_copy) {
                     eprintln!("Background snapshot failed: {e}")
                 } else {
@@ -68,65 +68,68 @@ fn main() {
         }
 
         match input.parse::<Cmd<String>>() {
-            Ok(cmd) => {
-                let mut cubic = cubicle.lock().unwrap();
-                match cmd {
-                    Cmd::Get(key) => match cubic.get(&key) {
-                        Some(val) => println!("-> {val}"),
+            Ok(cmd) => match cmd {
+                Cmd::Get(key) => {
+                    let val = cubicle.read().expect("RwLock poisoned").get(&key).cloned();
+                    match val {
+                        Some(v) => println!("-> {v}"),
                         None => println!("Key not found"),
-                    },
-                    Cmd::Set(key, value) => {
-                        let log = format!("SET {} {}\n", key, value);
-                        if wal_file.write_all(log.as_bytes()).is_ok() && wal_file.flush().is_ok() {
-                            cubic.insert(key, value);
+                    }
+                }
+                Cmd::Set(key, value) => {
+                    let log = format!("SET {} {}\n", key, value);
+                    if wal_file.write_all(log.as_bytes()).is_ok() && wal_file.flush().is_ok() {
+                        cubicle.write().expect("RwLock poisoned").insert(key, value);
+                        dirty.store(true, Ordering::Release);
+                        println!("-> OK");
+                    } else {
+                        println!("-> Error: Failed to write to WAL");
+                    }
+                }
+                Cmd::Delete(key) => {
+                    let log = format!("DELETE {}\n", key);
+                    if wal_file.write_all(log.as_bytes()).is_ok() && wal_file.flush().is_ok() {
+                        let removed = cubicle.write().expect("RwLock poisoned").remove(&key);
+                        if removed.is_some() {
                             dirty.store(true, Ordering::Release);
-                            println!("-> OK");
+                            println!("-> Deleted");
                         } else {
-                            println!("-> Error: Failed to write to WAL");
+                            println!("Key not found");
                         }
+                    } else {
+                        println!("-> Error: Failed to write to WAL");
                     }
-                    Cmd::Delete(key) => {
-                        let log = format!("DELETE {}\n", key);
-                        if wal_file.write_all(log.as_bytes()).is_ok() && wal_file.flush().is_ok() {
-                            if cubic.remove(&key).is_some() {
-                                dirty.store(true, Ordering::Release);
-                                println!("-> Deleted");
-                            } else {
-                                println!("Key not found");
-                            }
-                        } else {
-                            println!("-> Error: Failed to write to WAL");
+                }
+                Cmd::See => {
+                    let snapshot = cubicle.read().expect("RwLock poisoned").clone();
+                    if !snapshot.is_empty() {
+                        for (key, value) in snapshot.iter() {
+                            println!("{}: {}", key, value);
                         }
+                    } else {
+                        println!("Cubicle is empty");
                     }
-                    Cmd::See => {
-                        if !cubic.is_empty() {
-                            for (key, value) in cubic.iter() {
-                                println!("{}: {}", key, value);
+                }
+                Cmd::Snapshot => {
+                    let snapshot = cubicle.read().expect("RwLock poisoned").clone();
+                    if let Err(e) = create_snapshot(&snapshot) {
+                        println!("-> Error creating snapshot: {e}");
+                    } else {
+                        match OpenOptions::new()
+                            .create(true)
+                            .write(true)
+                            .truncate(true)
+                            .open(WAL)
+                        {
+                            Ok(new_wal) => {
+                                wal_file = new_wal;
+                                println!("-> Snapshot saved");
                             }
-                        } else {
-                            println!("Cubicle is empty");
-                        }
-                    }
-                    Cmd::Snapshot => {
-                        if let Err(e) = create_snapshot(&cubic) {
-                            println!("-> Error creating snapshot: {e}");
-                        } else {
-                            match OpenOptions::new()
-                                .create(true)
-                                .write(true)
-                                .truncate(true)
-                                .open(WAL)
-                            {
-                                Ok(new_wal) => {
-                                    wal_file = new_wal;
-                                    println!("-> Snapshot saved");
-                                }
-                                Err(e) => println!("-> Failed to truncate WAL: {e}"),
-                            }
+                            Err(e) => println!("-> Failed to truncate WAL: {e}"),
                         }
                     }
                 }
-            }
+            },
             Err(err) => println!("-> Error: {err}"),
         }
     }
