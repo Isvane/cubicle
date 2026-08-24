@@ -9,6 +9,7 @@ use std::{
     thread,
 };
 
+use crc32fast::hash;
 use im::OrdMap;
 
 mod cubicle;
@@ -77,7 +78,10 @@ fn main() {
                     }
                 }
                 Cmd::Set(key, value) => {
-                    let log = format!("SET {} {}\n", key, value);
+                    let payload = format!("SET {} {}", key, value);
+                    let crc = hash(payload.as_bytes());
+                    let log = format!("{:08x} {}\n", crc, payload);
+
                     if wal_file.write_all(log.as_bytes()).is_ok() && wal_file.flush().is_ok() {
                         cubicle.write().expect("RwLock poisoned").insert(key, value);
                         dirty.store(true, Ordering::Release);
@@ -87,7 +91,10 @@ fn main() {
                     }
                 }
                 Cmd::Delete(key) => {
-                    let log = format!("DELETE {}\n", key);
+                    let payload = format!("DELETE {}", key);
+                    let crc = hash(payload.as_bytes());
+                    let log = format!("{:08x} {}\n", crc, payload);
+
                     if wal_file.write_all(log.as_bytes()).is_ok() && wal_file.flush().is_ok() {
                         let removed = cubicle.write().expect("RwLock poisoned").remove(&key);
                         if removed.is_some() {
