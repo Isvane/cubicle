@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 crc32fast = "1.5.1"
+im = "15.1.0"

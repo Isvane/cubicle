@@ -1,18 +1,18 @@
 use std::{
-    collections::BTreeMap,
     fs::File,
     io::{self, BufRead, BufReader, Write},
 };
 
 use crc32fast::hash;
+use im::OrdMap;
 
 use crate::cubicle::cmd::{Cmd, Value};
 
 pub(crate) const WAL: &str = "cubicle.wal";
 pub(crate) const SNAPSHOT: &str = "cubicle.snap";
 
-pub fn restore_state() -> BTreeMap<String, Value> {
-    let mut map = BTreeMap::new();
+pub fn restore_state() -> OrdMap<String, Value> {
+    let mut map = OrdMap::new();
 
     if let Ok(file) = File::open(SNAPSHOT) {
         let reader = BufReader::new(file);
@@ -44,7 +44,9 @@ pub fn restore_state() -> BTreeMap<String, Value> {
                         map.insert(key, value);
                     }
                     Cmd::Put(key, value) => {
-                        map.entry(key).and_modify(|m| *m = value);
+                        if map.contains_key(&key) {
+                            map.insert(key, value);
+                        }
                     }
                     Cmd::Delete(key) => {
                         map.remove(&key);
@@ -58,7 +60,7 @@ pub fn restore_state() -> BTreeMap<String, Value> {
     map
 }
 
-pub fn create_snapshot(map: &BTreeMap<String, Value>) -> io::Result<()> {
+pub fn create_snapshot(map: &OrdMap<String, Value>) -> io::Result<()> {
     let temp_path = "cubicle.snap.tmp";
 
     let mut file = File::create(temp_path)?;

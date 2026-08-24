@@ -1,16 +1,17 @@
 # Cubicle KV
 
-Minimal key-value store built in Rust to learn how databases store and recover data.
+Minimal persistent key-value store built in Rust to learn how "databases" manage write logs, snapshot state, and recover data cleanly.
 
 ---
 
 ## Overview
 
-* **Write-Ahead Logging (WAL):** Write operations (`SET`, `PUT`, `DELETE`) are logged to `cubicle.wal` to preserve state in real time.
-* **Snapshotting:** Creates a compact, point-in-time state dump in `cubicle.snap` and truncates the WAL to keep startup fast and log files small.
-* **Data Recovery:** Automatically restores state on launch by first loading the snapshot baseline, then replaying remaining WAL entries.
-* **In-Memory Storage:** Keeps data in a sorted map for fast lookups and sorted iteration.
-* **Typed Values:** Values are strongly typed and natively support Strings (quoted or unquoted), Integers (`i64`), Floats (`f64`), List (`Vec<Value>`), and Booleans (`bool`).
+* **Write-Ahead Logging (WAL):** Write operations (`SET`, `PUT`, `DELETE`) are logged to `cubicle.wal` to guarantee durability before updating the in-memory engine.
+* **Snapshots:** Uses `im::OrdMap` to take zero-cost, persistent snapshots. Clones cost $O(1)$ by bumping a root reference pointer rather than deep-copying memory.
+* **Non-Blocking Background Flushing:** A dedicated background thread takes snapshot dumps to `cubicle.snap` without blocking main-thread CLI execution or holding locks during disk I/O.
+* **Data Recovery:** Rebuilds state on startup by combining the baseline snapshot with trailing WAL log replays.
+* **Ordered In-Memory Storage:** Maintains deterministic, sorted key iteration (`SEE` command) powered by immutable tree structures.
+* **Typed Values:** Strongly-typed value system supporting Strings, Integers (`i64`), Floats (`f64`), Lists (`Vec<Value>`), and Booleans (`bool`).
 
 ---
 
@@ -18,12 +19,12 @@ Minimal key-value store built in Rust to learn how databases store and recover d
 
 | Command | Usage | Description |
 | :--- | :--- | :--- |
-| `SET` | `SET <key> <value>` | Save a new key-value pair |
-| `GET` | `GET <key>` | Look up a value by its key |
+| `SET` | `SET <key> <value>` | Save or overwrite a key-value pair |
+| `GET` | `GET <key>` | Look up a value by key |
 | `PUT` | `PUT <key> <value>` | Update an existing key |
 | `DELETE` | `DELETE <key>` | Remove a key |
-| `SEE` | `SEE` | Print all stored data |
-| `SNAPSHOT` | `SNAPSHOT` | Compact current state to disk and clear the WAL |
+| `SEE` | `SEE` | Print all stored key-value pairs in sorted order |
+| `SNAPSHOT` | `SNAPSHOT` | Manually trigger a snapshot dump and clear the WAL |
 
 ---
 
@@ -49,7 +50,7 @@ SNAPSHOT
 -> Snapshot saved
 ```
 
-Close the app and restart it. You will see:
+Background auto-saves periodically snapshot dirty states to disk. When restarting the application, your state is automatically restored:
 ```text
 Restored 1 items from disk
 ```
