@@ -21,8 +21,7 @@ pub fn restore_state() -> OrdMap<String, Value> {
                 line.strip_prefix("SET ").and_then(|r| r.split_once(' '))
             {
                 if let Ok(expected_crc) = u32::from_str_radix(crc_hex, 16) {
-                    let actual_crc = hash(payload.as_bytes());
-                    if actual_crc == expected_crc {
+                    if hash(payload.as_bytes()) == expected_crc {
                         if let Some((key, value_str)) = payload.split_once(' ') {
                             let parsed_val = value_str
                                 .parse::<Value>()
@@ -38,7 +37,22 @@ pub fn restore_state() -> OrdMap<String, Value> {
     if let Ok(file) = File::open(WAL) {
         let reader = BufReader::new(file);
         for line in reader.lines().map_while(Result::ok) {
-            if let Ok(cmd) = line.parse::<Cmd<String>>() {
+            let (crc_hex, payload) = match line.split_once(' ') {
+                Some(pair) => pair,
+                None => break,
+            };
+
+            let expected_crc = match u32::from_str_radix(crc_hex, 16) {
+                Ok(crc) => crc,
+                Err(_) => break,
+            };
+
+            if hash(payload.as_bytes()) != expected_crc {
+                eprintln!("WAL corruption detected; stopping WAL replay.");
+                break;
+            }
+
+            if let Ok(cmd) = payload.parse::<Cmd<String>>() {
                 match cmd {
                     Cmd::Set(key, value) => {
                         map.insert(key, value);
