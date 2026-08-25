@@ -51,14 +51,20 @@ fn main() {
     });
 
     loop {
-        if rx.try_recv().is_ok()
-            && let Ok(new_wal) = OpenOptions::new()
+        let mut snap_completed = false;
+        while rx.try_recv().is_ok() {
+            snap_completed = true;
+        }
+
+        if snap_completed && !dirty.load(Ordering::Acquire) {
+            if let Ok(new_wal) = OpenOptions::new()
                 .create(true)
-                .write(true)
+                .append(true)
                 .truncate(true)
                 .open(WAL)
-        {
-            wal_file = new_wal;
+            {
+                wal_file = new_wal
+            }
         }
 
         println!("Enter a command: ");
@@ -130,6 +136,7 @@ fn main() {
                         {
                             Ok(new_wal) => {
                                 wal_file = new_wal;
+                                dirty.store(false, Ordering::Release);
                                 println!("-> Snapshot saved");
                             }
                             Err(e) => println!("-> Failed to truncate WAL: {e}"),
