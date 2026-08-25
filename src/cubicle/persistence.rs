@@ -1,6 +1,7 @@
-use std::{
-    fs::File,
-    io::{self, BufRead, BufReader, Write},
+use std::io;
+use tokio::{
+    fs::{self, File},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
 };
 
 use crc32fast::hash;
@@ -11,12 +12,14 @@ use crate::cubicle::cmd::{Cmd, Value};
 pub(crate) const WAL: &str = "cubicle.wal";
 pub(crate) const SNAPSHOT: &str = "cubicle.snap";
 
-pub fn restore_state() -> OrdMap<String, Value> {
+pub async fn restore_state() -> OrdMap<String, Value> {
     let mut map = OrdMap::new();
 
-    if let Ok(file) = File::open(SNAPSHOT) {
+    if let Ok(file) = File::open(SNAPSHOT).await {
         let reader = BufReader::new(file);
-        for line in reader.lines().map_while(Result::ok) {
+        let mut lines = reader.lines();
+
+        while let Ok(Some(line)) = lines.next_line().await {
             if let Some((crc_hex, payload)) =
                 line.strip_prefix("SET ").and_then(|r| r.split_once(' '))
             {
@@ -34,9 +37,11 @@ pub fn restore_state() -> OrdMap<String, Value> {
         }
     }
 
-    if let Ok(file) = File::open(WAL) {
+    if let Ok(file) = File::open(WAL).await {
         let reader = BufReader::new(file);
-        for line in reader.lines().map_while(Result::ok) {
+        let mut lines = reader.lines();
+
+        while let Ok(Some(line)) = lines.next_line().await {
             let (crc_hex, payload) = match line.split_once(' ') {
                 Some(pair) => pair,
                 None => break,
@@ -69,20 +74,20 @@ pub fn restore_state() -> OrdMap<String, Value> {
     map
 }
 
-pub fn create_snapshot(map: &OrdMap<String, Value>) -> io::Result<()> {
+pub async fn create_snapshot(map: &OrdMap<String, Value>) -> io::Result<()> {
     let temp_path = "cubicle.snap.tmp";
 
-    let mut file = File::create(temp_path)?;
+    let mut file = File::create(temp_path).await?;
     for (key, val) in map {
         let payload = format!("{} {}", key, val);
 
         let crc = hash(payload.as_bytes());
-        let crc_hex = format!("{:08x}", crc);
 
-        writeln!(file, "SET {} {}", crc_hex, payload)?;
+        let log_line = format!("SET {:08x} {}\n", crc, payload);
+        file.write_all(log_line.as_bytes()).await?;
     }
-    file.flush()?;
+    file.flush().await?;
 
-    std::fs::rename(temp_path, SNAPSHOT)?;
+    fs::rename(temp_path, SNAPSHOT).await?;
     Ok(())
 }

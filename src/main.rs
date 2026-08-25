@@ -1,150 +1,193 @@
-use std::{
-    fs::OpenOptions,
-    io::{self, Write},
-    sync::{
-        Arc, RwLock,
-        atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver, Sender, channel},
-    },
-    thread,
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use crc32fast::hash;
 use im::OrdMap;
+use tokio::{
+    fs::OpenOptions,
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::{TcpListener, TcpStream},
+    sync::{Mutex, RwLock},
+};
 
 mod cubicle;
 
 use cubicle::cmd::{Cmd, Value};
 use cubicle::persistence::{WAL, create_snapshot, restore_state};
 
-fn main() {
-    let initial_map: OrdMap<String, Value> = restore_state();
+struct AppState {
+    kv: RwLock<OrdMap<String, Value>>,
+    wal_file: Mutex<tokio::fs::File>,
+    dirty: AtomicBool,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let initial_map = restore_state().await;
     println!("Restored {} items from disk", initial_map.len());
 
-    let cubicle = Arc::new(RwLock::new(initial_map));
-    let dirty = Arc::new(AtomicBool::new(false));
+    let wal_file = OpenOptions::new().create(true).append(true).open(WAL).await;
 
-    let mut wal_file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(WAL)
-        .expect("Failed to open WAL file");
+    let file = match wal_file {
+        Ok(file) => file,
+        Err(e) => return Err(e.into()),
+    };
 
-    let (tx, rx): (Sender<()>, Receiver<()>) = channel();
+    let state = Arc::new(AppState {
+        kv: RwLock::new(initial_map),
+        wal_file: Mutex::new(file),
+        dirty: AtomicBool::new(false),
+    });
 
-    let bg_cubic = Arc::clone(&cubicle);
-    let bg_dirty = Arc::clone(&dirty);
+    let bg_state = Arc::clone(&state);
 
-    thread::spawn(move || {
+    tokio::spawn(async move {
         loop {
-            thread::sleep(std::time::Duration::from_secs(10));
+            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
 
-            if bg_dirty.swap(false, Ordering::AcqRel) {
-                let snapshot_copy = bg_cubic.read().expect("").clone();
-                if let Err(e) = create_snapshot(&snapshot_copy) {
-                    eprintln!("Background snapshot failed: {e}")
-                } else {
-                    let _ = tx.send(());
+            if bg_state.dirty.swap(false, Ordering::AcqRel) {
+                let snapshot_copy = bg_state.kv.read().await.clone();
+
+                if create_snapshot(&snapshot_copy).await.is_ok() {
+                    let mut wal_lock = bg_state.wal_file.lock().await;
+
+                    if let Ok(new_wal) = OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .truncate(true)
+                        .open(WAL)
+                        .await
+                    {
+                        *wal_lock = new_wal;
+                    }
                 }
             }
         }
     });
 
+    let listener = TcpListener::bind("127.0.0.1:8080").await?;
+    println!("Server running on 127.0.0.1:8080");
+
     loop {
-        let mut snap_completed = false;
-        while rx.try_recv().is_ok() {
-            snap_completed = true;
-        }
+        let (socket, addr) = listener.accept().await?;
+        println!("New connection from: {}", addr);
 
-        if snap_completed && !dirty.load(Ordering::Acquire) {
-            if let Ok(new_wal) = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .truncate(true)
-                .open(WAL)
-            {
-                wal_file = new_wal
-            }
-        }
+        let state_clone = Arc::clone(&state);
 
-        println!("Enter a command: ");
-        let mut input = String::new();
+        tokio::spawn(async move {
+            handle_client(socket, state_clone).await;
+        });
+    }
+}
 
-        if io::stdin().read_line(&mut input).is_err() {
-            break;
-        }
+async fn handle_client(mut socket: TcpStream, state: Arc<AppState>) {
+    let (reader, mut writer) = socket.split();
+    let mut bufreader = BufReader::new(reader);
+    let mut line = String::new();
 
-        match input.parse::<Cmd<String>>() {
-            Ok(cmd) => match cmd {
-                Cmd::Get(key) => {
-                    let val = cubicle.read().expect("RwLock poisoned").get(&key).cloned();
-                    match val {
-                        Some(v) => println!("-> {v}"),
-                        None => println!("Key not found"),
-                    }
-                }
-                Cmd::Set(key, value) => {
-                    let payload = format!("SET {} {}", key, value);
-                    let crc = hash(payload.as_bytes());
-                    let log = format!("{:08x} {}\n", crc, payload);
+    loop {
+        line.clear();
 
-                    if wal_file.write_all(log.as_bytes()).is_ok() && wal_file.flush().is_ok() {
-                        cubicle.write().expect("RwLock poisoned").insert(key, value);
-                        dirty.store(true, Ordering::Release);
-                        println!("-> OK");
-                    } else {
-                        println!("-> Error: Failed to write to WAL");
-                    }
-                }
-                Cmd::Delete(key) => {
-                    let payload = format!("DELETE {}", key);
-                    let crc = hash(payload.as_bytes());
-                    let log = format!("{:08x} {}\n", crc, payload);
-
-                    if wal_file.write_all(log.as_bytes()).is_ok() && wal_file.flush().is_ok() {
-                        let removed = cubicle.write().expect("RwLock poisoned").remove(&key);
-                        if removed.is_some() {
-                            dirty.store(true, Ordering::Release);
-                            println!("-> Deleted");
-                        } else {
-                            println!("Key not found");
-                        }
-                    } else {
-                        println!("-> Error: Failed to write to WAL");
-                    }
-                }
-                Cmd::See => {
-                    let snapshot = cubicle.read().expect("RwLock poisoned").clone();
-                    if !snapshot.is_empty() {
-                        for (key, value) in snapshot.iter() {
-                            println!("{}: {}", key, value);
-                        }
-                    } else {
-                        println!("Cubicle is empty");
-                    }
-                }
-                Cmd::Snapshot => {
-                    let snapshot = cubicle.read().expect("RwLock poisoned").clone();
-                    if let Err(e) = create_snapshot(&snapshot) {
-                        println!("-> Error creating snapshot: {e}");
-                    } else {
-                        match OpenOptions::new()
-                            .create(true)
-                            .write(true)
-                            .truncate(true)
-                            .open(WAL)
-                        {
-                            Ok(new_wal) => {
-                                wal_file = new_wal;
-                                dirty.store(false, Ordering::Release);
-                                println!("-> Snapshot saved");
+        match bufreader.read_line(&mut line).await {
+            Ok(0) => break,
+            Ok(_) => match line.trim_end().parse::<Cmd<String>>() {
+                Ok(cmd) => match cmd {
+                    Cmd::Get(key) => {
+                        let val = state.kv.read().await.get(&key).cloned();
+                        match val {
+                            Some(v) => {
+                                let _ = writer.write_all(format!("-> {}\n", v).as_bytes()).await;
                             }
-                            Err(e) => println!("-> Failed to truncate WAL: {e}"),
+                            None => {
+                                let _ = writer.write_all(b"-> Key not found\n").await;
+                            }
                         }
                     }
+                    Cmd::Set(key, val) => {
+                        let payload = format!("SET {} {}", key, val);
+                        let crc = hash(payload.as_bytes());
+                        let log = format!("{:08x} {}\n", crc, payload);
+
+                        let mut wal = state.wal_file.lock().await;
+                        if wal.write_all(log.as_bytes()).await.is_ok() && wal.flush().await.is_ok()
+                        {
+                            state.kv.write().await.insert(key, val);
+                            state.dirty.store(true, Ordering::Release);
+                            let _ = writer.write_all(b"-> OK\n").await;
+                        } else {
+                            let _ = writer
+                                .write_all(b"-> Error: Failed to write to WAL\n")
+                                .await;
+                        }
+                    }
+                    Cmd::Delete(key) => {
+                        let payload = format!("DELETE {}", key);
+                        let crc = hash(payload.as_bytes());
+                        let log = format!("{:08x} {}\n", crc, payload);
+
+                        let mut wal = state.wal_file.lock().await;
+                        if wal.write_all(log.as_bytes()).await.is_ok() && wal.flush().await.is_ok()
+                        {
+                            let removed = state.kv.write().await.remove(&key);
+                            if removed.is_some() {
+                                state.dirty.store(true, Ordering::Release);
+                                let _ = writer.write_all(b"-> Deleted\n").await;
+                            } else {
+                                let _ = writer.write_all(b"-> Key not found\n").await;
+                            }
+                        } else {
+                            let _ = writer
+                                .write_all(b"-> Error: Failed to write to WAL\n")
+                                .await;
+                        }
+                    }
+                    Cmd::See => {
+                        let snapshot = state.kv.read().await.clone();
+                        if !snapshot.is_empty() {
+                            for (key, val) in snapshot.iter() {
+                                let _ = writer
+                                    .write_all(format!("{}: {}\n", key, val).as_bytes())
+                                    .await;
+                            }
+                        } else {
+                            let _ = writer.write_all(b"Cubicle is empty\n").await;
+                        }
+                    }
+                    Cmd::Snapshot => {
+                        let snapshot = state.kv.read().await.clone();
+                        if let Err(e) = create_snapshot(&snapshot).await {
+                            let _ = writer
+                                .write_all(
+                                    format!("-> Error creating snapshot: {}\n", e).as_bytes(),
+                                )
+                                .await;
+                        } else {
+                            let mut wal = state.wal_file.lock().await;
+                            if let Ok(new_wal) = OpenOptions::new()
+                                .create(true)
+                                .write(true)
+                                .truncate(true)
+                                .open(WAL)
+                                .await
+                            {
+                                *wal = new_wal;
+                                state.dirty.store(false, Ordering::Release);
+                                let _ = writer.write_all(b"-> Snapshot saved\n").await;
+                            } else {
+                                let _ = writer.write_all(b"-> Failed to truncate WAL\n").await;
+                            }
+                        }
+                    }
+                },
+                Err(e) => {
+                    let _ = writer
+                        .write_all(format!("-> Error: {}\n", e).as_bytes())
+                        .await;
                 }
             },
-            Err(err) => println!("-> Error: {err}"),
+            Err(_) => break,
         }
     }
 }
