@@ -55,8 +55,8 @@ impl TryFrom<Frame> for Cmd<String> {
                 }
                 Ok(Cmd::Delete(get_string(&frames[1])?))
             }
-            "SEE" => Ok(Cmd::See),
-            "SNAPSHOT" => Ok(Cmd::Snapshot),
+            "SEE" | "KEYS" => Ok(Cmd::See),
+            "SNAPSHOT" | "SAVE" | "BGSAVE" => Ok(Cmd::Snapshot),
             _ => Err(format!("ERR unknown command '{}'", cmd_name)),
         }
     }
