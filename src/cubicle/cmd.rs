@@ -1,6 +1,6 @@
 use crate::cubicle::resp::Frame;
 
-use std::{fmt, str::FromStr};
+use std::str::FromStr;
 
 pub(crate) enum Cmd<T> {
     Get(T),
@@ -69,72 +69,6 @@ pub(crate) enum Value {
     Float(f64),
     Boolean(bool),
     List(Vec<Value>),
-}
-
-fn extract_key(s: &str) -> Result<(&str, &str), String> {
-    let s = s.trim_start();
-    if s.is_empty() {
-        return Err("Missing required key argument".to_string());
-    }
-
-    if s.starts_with('"') {
-        let closing = s[1..]
-            .find('"')
-            .map(|i| i + 1)
-            .ok_or("Unclosed quote in key")?;
-        Ok((&s[1..closing], &s[closing + 1..]))
-    } else {
-        let end = s.find(char::is_whitespace).unwrap_or(s.len());
-        Ok((&s[..end], &s[end..]))
-    }
-}
-
-impl<T> FromStr for Cmd<T>
-where
-    T: FromStr,
-    T::Err: fmt::Display,
-{
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let trimmed = s.trim_start();
-        if trimmed.is_empty() {
-            return Err("Empty input".to_string());
-        }
-
-        let (verb, remainder) = match trimmed.find(char::is_whitespace) {
-            Some(idx) => (&trimmed[..idx], &trimmed[idx..]),
-            None => (trimmed, ""),
-        };
-
-        let verb = verb.to_uppercase();
-
-        match verb.as_str() {
-            "GET" => {
-                let (key_str, _) = extract_key(remainder)?;
-                let key = key_str.parse::<T>().map_err(|e| format!("{e}"))?;
-                Ok(Cmd::Get(key))
-            }
-            "SET" => {
-                let (key_str, value_str) = extract_key(remainder)?;
-                let key = key_str.parse::<T>().map_err(|e| format!("{e}"))?;
-                let value_str = value_str.trim();
-                if value_str.is_empty() {
-                    return Err("SET requires a value".to_string());
-                }
-                let value = value_str.parse::<Value>()?;
-                Ok(Cmd::Set(key, value))
-            }
-            "DELETE" => {
-                let (key_str, _) = extract_key(remainder)?;
-                let key = key_str.parse::<T>().map_err(|e| format!("{e}"))?;
-                Ok(Cmd::Delete(key))
-            }
-            "SEE" => Ok(Cmd::See),
-            "SNAPSHOT" => Ok(Cmd::Snapshot),
-            _ => Err(format!("Invalid command {}", verb)),
-        }
-    }
 }
 
 impl FromStr for Value {

@@ -91,7 +91,9 @@ async fn handle_client(mut socket: TcpStream, state: Arc<AppState>) {
         match socket.read_buf(&mut buffer).await {
             Ok(0) => break,
             Ok(_) => {
-                while let Ok(Some(frame)) = Frame::parse(&mut buffer) {
+                while let Ok(Some(frame)) = Frame::parser(&mut buffer) {
+                    let resp_bytes = frame.to_bytes();
+
                     let response_frame = match Cmd::try_from(frame) {
                         Ok(cmd) => match cmd {
                             Cmd::Get(key) => {
@@ -104,12 +106,12 @@ async fn handle_client(mut socket: TcpStream, state: Arc<AppState>) {
                                 }
                             }
                             Cmd::Set(key, val) => {
-                                let payload = format!("SET {} {}", key, val);
-                                let crc = hash(payload.as_bytes());
-                                let log = format!("{:08x} {}\n", crc, payload);
+                                let crc = hash(&resp_bytes);
+                                let header = format!("{:08x} ", crc);
 
                                 let mut wal = state.wal_file.lock().await;
-                                if wal.write_all(log.as_bytes()).await.is_ok()
+                                if wal.write_all(header.as_bytes()).await.is_ok()
+                                    && wal.write_all(&resp_bytes).await.is_ok()
                                     && wal.flush().await.is_ok()
                                 {
                                     state.kv.write().await.insert(key, val);
@@ -120,12 +122,12 @@ async fn handle_client(mut socket: TcpStream, state: Arc<AppState>) {
                                 }
                             }
                             Cmd::Delete(key) => {
-                                let payload = format!("DELETE {}", key);
-                                let crc = hash(payload.as_bytes());
-                                let log = format!("{:08x} {}\n", crc, payload);
+                                let crc = hash(&resp_bytes);
+                                let header = format!("{:08x} ", crc);
 
                                 let mut wal = state.wal_file.lock().await;
-                                if wal.write_all(log.as_bytes()).await.is_ok()
+                                if wal.write_all(header.as_bytes()).await.is_ok()
+                                    && wal.write_all(&resp_bytes).await.is_ok()
                                     && wal.flush().await.is_ok()
                                 {
                                     let removed = state.kv.write().await.remove(&key);

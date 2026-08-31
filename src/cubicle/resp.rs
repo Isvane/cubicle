@@ -66,7 +66,7 @@ impl Frame {
         }
     }
 
-    pub fn parse(src: &mut BytesMut) -> Result<Option<Self>, io::Error> {
+    pub fn parser(src: &mut BytesMut) -> Result<Option<Self>, io::Error> {
         let mut cursor = Cursor::new(&src[..]);
 
         match Self::parse_cursor(&mut cursor)? {
