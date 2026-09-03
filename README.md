@@ -1,4 +1,4 @@
-# Cubicle KV
+# cubicle kv
 
 Minimal persistent, concurrent, multi-client key-value TCP server built in Rust using Tokio to learn how databases handle write-ahead logging (WAL), snapshotting, non-blocking persistence, and state recovery.
 
